@@ -30,7 +30,7 @@ cv::Mat gaussian_blur_kernel(int size, float sigma)
   // for kernel normalization
   float sum = 0;
   //each rows
-  for (int i = 0; i < kernel.rows; i++)
+  for (int i = 0; i < kernel.rows; i++) //N=7  -3 -> 3
   {
     //each columns
     for (int j = 0; j < kernel.cols; j++)
@@ -43,7 +43,7 @@ cv::Mat gaussian_blur_kernel(int size, float sigma)
       sum += kernel.at<float>(i, j);
     }
   }
-  // normalize kernel
+  // normalize kernel           100 200 150 100+200+150 = 450  0.222 0.33 0.50
   kernel /= sum;
 
   return kernel;
@@ -55,11 +55,11 @@ std::array<cv::Mat, 256> gaussian_histogram(int focus)
   // initialize array of size 256
   std::array<cv::Mat, 256> hist;
   // kernel max size
-  float size = 20;
+  float size = 15;
   // gap for depth incrementation
-  float gap = size / (focus + 1);
+  float gap = size / 256;
   // for each depth behind focus
-  for (int i = 0; i < focus; i++)
+  for (int i = 0; i < focus; i++) //high blur to low blur
   {
     // assign new kernel to i value
     hist[i] = gaussian_blur_kernel(size - i * gap, sqrt(size - i * gap));
@@ -67,67 +67,69 @@ std::array<cv::Mat, 256> gaussian_histogram(int focus)
   // no blur for value from focus to 255
   for (int i = focus; i < 256; i++)
   {
-
-    hist[i] = gaussian_blur_kernel(1, 0.01);
+    hist[i] = gaussian_blur_kernel((i - focus + 1) * gap, sqrt((i - focus + 1) * gap));
   }
   return hist;
 }
 
-/* apply convolution depending on RBGD properties */
+/* apply convolution depending on RBGD properties */ // tester récursion pour augmenter l'intensité
 void filter(const cv::Mat &src, const cv::Mat &src_depth,
-            cv::Mat &dst, int focus)
+            cv::Mat &dst, int focus, int rec)
 {
-  // initialize result image
-  dst = cv::Mat(src.rows, src.cols, CV_32FC3, cv::Scalar(0., 0., 0.));
-  // get gaussian_histogram for specific focus
-  auto hist = gaussian_histogram(focus);
-  // for each rows
-  for (int x = 0; x < src.rows; x++)
+  cv::Mat base_image = src;
+
+  for (int z = 0; z < rec; z++)
   {
-    // for each columns
-    for (int y = 0; y < src.cols; y++)
+    // initialize result image
+    dst = cv::Mat(src.rows, src.cols, CV_32FC3, cv::Scalar(0., 0., 0.));
+    // get gaussian_histogram for specific focus
+    auto hist = gaussian_histogram(focus);
+    // for each rows
+    for (int x = 0; x < base_image.rows; x++)
     {
-      // get depth of target pixel
-      uchar current_depth = src_depth.at<uchar>(x, y);
-      // get kernel for the target pixel
-      cv::Mat kernel = hist[current_depth];
-      // get kernel size
-      int N = kernel.cols;
-      // sum for pixel guessing
-      float sum = 0.;
-      // for each kernel rows
-      for (int i = x - N / 2; i <= x + N / 2; i++)
+      // for each columns
+      for (int y = 0; y < base_image.cols; y++)
       {
-        // for each kernel columns
-        for (int j = y - N / 2; j <= y + N / 2; j++)
+        // get depth of target pixel
+        uchar current_depth = src_depth.at<uchar>(x, y);
+        // get kernel for the target pixel
+        cv::Mat kernel = hist[current_depth];
+        // get kernel size
+        int N = kernel.cols;
+        // sum for pixel guessing
+        float sum = 0.;
+        // for each kernel rows
+        for (int i = x - N / 2; i <= x + N / 2; i++)
         {
-          // if pixel is not out of image
-          if (i > 0 && i < src.rows && j > 0 && j < src.cols)
+          // for each kernel columns
+          for (int j = y - N / 2; j <= y + N / 2; j++)
           {
-            // if pixel pointed by kernel is behind target pixel
-            if (src_depth.at<uchar>(i, j) <= current_depth)
+            // if pixel is not out of image
+            if (i > 0 && i < base_image.rows && j > 0 && j < base_image.cols)
             {
-              dst.at<cv::Vec3f>(x, y) += src.at<cv::Vec3f>(i, j) * kernel.at<float>(i - x + N / 2, j - y + N / 2);
+              // if pixel pointed by kernel is behind target pixel
+              if (src_depth.at<uchar>(i, j) <= current_depth)
+              {
+                dst.at<cv::Vec3f>(x, y) += base_image.at<cv::Vec3f>(i, j) * kernel.at<float>(i - x + N / 2, j - y + N / 2);
+              }
+              // else pixel is ahead target pixel
+              else
+              {
+                sum += kernel.at<float>(i - x + N / 2, j - y + N / 2);
+              }
             }
-            // else pixel is ahead target pixel
+            // else pixel is out of image
             else
             {
               sum += kernel.at<float>(i - x + N / 2, j - y + N / 2);
             }
           }
-          // else pixel is out of image
-          else
-          {
-            sum += kernel.at<float>(i - x + N / 2, j - y + N / 2);
-          }
         }
-      }
-      // if sum is greater than 0 we add source target pixel color
-      if (sum > 0)
-      {
+        // if sum is greater than 0 we add source target pixel color
         dst.at<cv::Vec3f>(x, y) += src.at<cv::Vec3f>(x, y) * sum;
       }
     }
+    base_image = dst;
   }
 }
 
@@ -149,7 +151,7 @@ void callBackKeyboard(int event, int x, int y, int flags, void *userdata)
   // left click
   case cv::EVENT_LBUTTONDOWN:
     // filter image depending on click focus
-    filter(data->image, data->image_depth, data->blured_image, data->image_depth.at<uint8_t>(y, x));
+    filter(data->image, data->image_depth, data->blured_image, data->image_depth.at<uint8_t>(y, x), 3);
     break;
   case cv::EVENT_RBUTTONDOWN:
   case cv::EVENT_MBUTTONDOWN:
