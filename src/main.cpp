@@ -35,8 +35,9 @@ cv::Mat gaussian_blur_kernel(int size, float sigma)
     //each columns
     for (int j = 0; j < kernel.cols; j++)
     {
+      float position = (-(N - 1) * 0.5);
       // get value from i - N/2 to i + N/2 to center gaussian distribution (same for j)
-      float squareDist = pow((-(N - 1) * 0.5) + i, 2) + pow((-(N - 1) * 0.5) + j, 2);
+      float squareDist = pow(position + i, 2) + pow(position + j, 2);
       // apply gaussian formula
       kernel.at<float>(i, j) = exp(-squareDist / (2.0 * sigma * sigma));
       // increment sum
@@ -57,33 +58,34 @@ std::array<cv::Mat, 256> gaussian_histogram(int focus)
   // kernel max size
   float size = 15;
   // gap for depth incrementation
-  float gap = size / 256;
+  float gap = size / std::max(256 - focus, focus);
   // for each depth behind focus
   for (int i = 0; i < focus; i++) //high blur to low blur
   {
-    // assign new kernel to i value
-    hist[i] = gaussian_blur_kernel(size - i * gap, sqrt(size - i * gap));
+    float new_size = (focus - i) * gap;
+    hist[i] = gaussian_blur_kernel(new_size, sqrt(new_size));
   }
-  // no blur for value from focus to 255
+  // for each depth in front of focus
   for (int i = focus; i < 256; i++)
   {
-    hist[i] = gaussian_blur_kernel((i - focus + 1) * gap, sqrt((i - focus + 1) * gap));
+    float new_size = (i - focus + 1) * gap;
+    hist[i] = gaussian_blur_kernel(new_size, sqrt(new_size));
   }
   return hist;
 }
 
-/* apply convolution depending on RBGD properties */ // tester récursion pour augmenter l'intensité
+/* apply convolution depending on RBGD properties */
 void filter(const cv::Mat &src, const cv::Mat &src_depth,
             cv::Mat &dst, int focus, int rec)
 {
   cv::Mat base_image = src;
+  // get gaussian_histogram for specific focus
+  auto hist = gaussian_histogram(focus);
 
   for (int z = 0; z < rec; z++)
   {
     // initialize result image
     dst = cv::Mat(src.rows, src.cols, CV_32FC3, cv::Scalar(0., 0., 0.));
-    // get gaussian_histogram for specific focus
-    auto hist = gaussian_histogram(focus);
     // for each rows
     for (int x = 0; x < base_image.rows; x++)
     {
@@ -92,17 +94,18 @@ void filter(const cv::Mat &src, const cv::Mat &src_depth,
       {
         // get depth of target pixel
         uchar current_depth = src_depth.at<uchar>(x, y);
+
         // get kernel for the target pixel
         cv::Mat kernel = hist[current_depth];
         // get kernel size
-        int N = kernel.cols;
+        int N2 = kernel.cols / 2;
         // sum for pixel guessing
         float sum = 0.;
         // for each kernel rows
-        for (int i = x - N / 2; i <= x + N / 2; i++)
+        for (int i = x - N2; i <= x + N2; i++)
         {
           // for each kernel columns
-          for (int j = y - N / 2; j <= y + N / 2; j++)
+          for (int j = y - N2; j <= y + N2; j++)
           {
             // if pixel is not out of image
             if (i > 0 && i < base_image.rows && j > 0 && j < base_image.cols)
@@ -110,23 +113,23 @@ void filter(const cv::Mat &src, const cv::Mat &src_depth,
               // if pixel pointed by kernel is behind target pixel
               if (src_depth.at<uchar>(i, j) <= current_depth)
               {
-                dst.at<cv::Vec3f>(x, y) += base_image.at<cv::Vec3f>(i, j) * kernel.at<float>(i - x + N / 2, j - y + N / 2);
+                dst.at<cv::Vec3f>(x, y) += base_image.at<cv::Vec3f>(i, j) * kernel.at<float>(i - x + N2, j - y + N2);
               }
               // else pixel is ahead target pixel
               else
               {
-                sum += kernel.at<float>(i - x + N / 2, j - y + N / 2);
+                sum += kernel.at<float>(i - x + N2, j - y + N2);
               }
             }
             // else pixel is out of image
             else
             {
-              sum += kernel.at<float>(i - x + N / 2, j - y + N / 2);
+              sum += kernel.at<float>(i - x + N2, j - y + N2);
             }
           }
         }
         // if sum is greater than 0 we add source target pixel color
-        dst.at<cv::Vec3f>(x, y) += src.at<cv::Vec3f>(x, y) * sum;
+        dst.at<cv::Vec3f>(x, y) += dst.at<cv::Vec3f>(x, y) * (sum / (1. - sum));
       }
     }
     base_image = dst;
