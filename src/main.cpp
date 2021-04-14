@@ -29,12 +29,13 @@ cv::Mat gaussian_blur_kernel(int size, float sigma)
   cv::Mat kernel(N, N, CV_32F);
   // for kernel normalization
   float sum = 0;
-  //each rows
-  for (int i = 0; i < kernel.rows; i++) //N=7  -3 -> 3
+  // each rows
+  for (int i = 0; i < kernel.rows; i++)
   {
-    //each columns
+    // each columns
     for (int j = 0; j < kernel.cols; j++)
     {
+      //center position
       float position = (-(N - 1) * 0.5);
       // get value from i - N/2 to i + N/2 to center gaussian distribution (same for j)
       float squareDist = pow(position + i, 2) + pow(position + j, 2);
@@ -44,14 +45,14 @@ cv::Mat gaussian_blur_kernel(int size, float sigma)
       sum += kernel.at<float>(i, j);
     }
   }
-  // normalize kernel           100 200 150 100+200+150 = 450  0.222 0.33 0.50
+  // normalize kernel
   kernel /= sum;
 
   return kernel;
 }
 
-/* histogram Assign specific gaussian kernel to values from 0 to 255 */
-std::array<cv::Mat, 256> gaussian_histogram(int focus)
+/* mapping which assign specific gaussian kernel to values from 0 to 255 */
+std::array<cv::Mat, 256> gaussian_mapping(int focus)
 {
   // initialize array of size 256
   std::array<cv::Mat, 256> hist;
@@ -59,17 +60,17 @@ std::array<cv::Mat, 256> gaussian_histogram(int focus)
   float size = 15;
   // gap for depth incrementation
   float gap = size / std::max(256 - focus, focus);
-  // for each depth behind focus
-  for (int i = 0; i < focus; i++) //high blur to low blur
+  for (int i = 0; i < focus; i++) //high blur to low blur -> back to focus
   {
+    // kernel size
     float new_size = (focus - i) * gap;
-    hist[i] = gaussian_blur_kernel(new_size, sqrt(new_size));
+    // assign new kernel
+    hist[i] = gaussian_blur_kernel(int(new_size + 1), new_size / 2.);
   }
-  // for each depth in front of focus
-  for (int i = focus; i < 256; i++)
+  for (int i = focus; i < 256; i++) //low blur to high blur -> focus to front
   {
     float new_size = (i - focus + 1) * gap;
-    hist[i] = gaussian_blur_kernel(new_size, sqrt(new_size));
+    hist[i] = gaussian_blur_kernel(int(new_size + 1), new_size / 2.);
   }
   return hist;
 }
@@ -78,10 +79,12 @@ std::array<cv::Mat, 256> gaussian_histogram(int focus)
 void filter(const cv::Mat &src, const cv::Mat &src_depth,
             cv::Mat &dst, int focus, int rec)
 {
+  // scratch image
   cv::Mat base_image = src;
-  // get gaussian_histogram for specific focus
-  auto hist = gaussian_histogram(focus);
+  // get gaussian_mapping for specific focus
+  auto hist = gaussian_mapping(focus);
 
+  // recursive blur
   for (int z = 0; z < rec; z++)
   {
     // initialize result image
@@ -94,7 +97,6 @@ void filter(const cv::Mat &src, const cv::Mat &src_depth,
       {
         // get depth of target pixel
         uchar current_depth = src_depth.at<uchar>(x, y);
-
         // get kernel for the target pixel
         cv::Mat kernel = hist[current_depth];
         // get kernel size
@@ -111,7 +113,7 @@ void filter(const cv::Mat &src, const cv::Mat &src_depth,
             if (i > 0 && i < base_image.rows && j > 0 && j < base_image.cols)
             {
               // if pixel pointed by kernel is behind target pixel
-              if (src_depth.at<uchar>(i, j) <= current_depth)
+              if (src_depth.at<uchar>(i, j) <= current_depth + 20)
               {
                 dst.at<cv::Vec3f>(x, y) += base_image.at<cv::Vec3f>(i, j) * kernel.at<float>(i - x + N2, j - y + N2);
               }
@@ -128,10 +130,11 @@ void filter(const cv::Mat &src, const cv::Mat &src_depth,
             }
           }
         }
-        // if sum is greater than 0 we add source target pixel color
+        // if sum is greater than 0 we add dst value to normalize pixel
         dst.at<cv::Vec3f>(x, y) += dst.at<cv::Vec3f>(x, y) * (sum / (1. - sum));
       }
     }
+    // copy dst in base_image
     base_image = dst;
   }
 }
@@ -144,7 +147,7 @@ struct Data
   cv::Mat blured_image;
 };
 
-// function call on click
+/* function call on click */
 void callBackKeyboard(int event, int x, int y, int flags, void *userdata)
 {
   // cast data
@@ -180,7 +183,7 @@ int main(int argc, char **argv)
   {
     return -1;
   }
-  // load depth image
+  // load depth image as GRAYSCALE image
   if (load_image(argv[2], data.image_depth, cv::IMREAD_GRAYSCALE) == -1)
   {
     return -1;
@@ -191,6 +194,8 @@ int main(int argc, char **argv)
   data.image.convertTo(float_image, CV_32FC3, 1. / 255.);
   data.image = float_image;
   data.blured_image = data.image;
+
+  //window name
   std::string window_name = "RGBD image";
   /* Create window */
   cv::namedWindow(window_name);
